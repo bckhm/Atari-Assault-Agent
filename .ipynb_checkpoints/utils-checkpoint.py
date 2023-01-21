@@ -11,6 +11,11 @@ import pandas as pd
 import tensorflow as tf
 from statsmodels.iolib.table import SimpleTable
 
+MINIBATCH_SIZE = 200
+E_DECAY = 0.995  # ε-decay rate for the ε-greedy policy.
+E_MIN = 0.01  # Minimum ε value for the ε-greedy policy.
+
+
 def display_table(initial_state, action, next_state, reward, done):
     """
     Displays a table containing the initial state, action, next state, reward, and done
@@ -18,7 +23,7 @@ def display_table(initial_state, action, next_state, reward, done):
 
 
     Args:
-        initial_state (numpy.ndarray):
+        initial_state (tuple):
             The initial state vector returned when resetting the Blackjack
             environment, i.e the value returned by the env.reset() method.
         action (int):
@@ -26,7 +31,7 @@ def display_table(initial_state, action, next_state, reward, done):
             represented by integers 0 or 1. The elements correspond to:
                 - 0: Stick
                 - 1: Hit
-        next_state (numpy.ndarray):
+        next_state (tuple):
             The state vector returned by the environment after the agent
             takes an action, i.e the observation returned after running a single time
             step of the environment's dynamics using env.step(action).
@@ -34,10 +39,6 @@ def display_table(initial_state, action, next_state, reward, done):
             The reward returned by the  environment after the agent takes an
             action, i.e the reward returned after running a single time step of the
             environment's dynamics using env.step(action).
-        done (bool):
-            The done value returned by the  environment after the agent
-            takes an action, i.e the done value returned after running a single time
-            step of the environment's dynamics using env.step(action).
     
     Returns:
         table (statsmodels.iolib.table.SimpleTable):
@@ -57,8 +58,8 @@ def display_table(initial_state, action, next_state, reward, done):
             ("Action:", labels[action]),
             ("Next State:", [f"{next_state}"]),
             ("Reward Received:", [f"{reward:.3f}"]),
-            ("Episode Terminated:", [f"{done}"]),
-        ]
+            ("Episode Terminated:", [f"{done}"])
+            ]
 
     # Generate table.
     row_labels, data = zip_longest(*table_info)
@@ -124,4 +125,115 @@ def get_action(q_values, epsilon=0.0):
         return np.random.choice(np.arange(1))
     
     
-        
+def check_update_conditions(t, num_steps_upd, memory_buffer):
+    """
+    Determines if the conditions are met to perform a learning update.
+
+    Checks if the current time step t is a multiple of num_steps_upd and if the
+    memory_buffer has enough experience tuples to fill a mini-batch (for example, if the
+    mini-batch size is 64, then the memory buffer should have more than 64 experience
+    tuples in order to perform a learning update).
+    
+    Args:
+        t (int):
+            The current time step.
+        num_steps_upd (int):
+            The number of time steps used to determine how often to perform a learning
+            update. A learning update is only performed every num_steps_upd time steps.
+        memory_buffer (deque):
+            A deque containing experiences. The experiences are stored in the memory
+            buffer as namedtuples: namedtuple("Experience", field_names=["state",
+            "action", "reward", "next_state", "done"]).
+
+    Returns:
+       A boolean that will be True if conditions are met and False otherwise. 
+    """
+
+    if (t + 1) % num_steps_upd == 0 and len(memory_buffer) > MINIBATCH_SIZE:
+        return True
+    else:
+        return False
+
+    
+def get_experiences(memory_buffer):
+    """
+    Returns a random sample of experience tuples drawn from the memory buffer.
+
+    Retrieves a random sample of experience tuples from the given memory_buffer and
+    returns them as TensorFlow Tensors. The size of the random sample is determined by
+    the mini-batch size (MINIBATCH_SIZE). 
+    
+    Args:
+        memory_buffer (deque):
+            A deque containing experiences. The experiences are stored in the memory
+            buffer as namedtuples: namedtuple("Experience", field_names=["state",
+            "action", "reward", "next_state", "done"]).
+
+    Returns:
+        A tuple (states, actions, rewards, next_states, done_vals) where:
+
+            - states are the starting states of the agent.
+            - actions are the actions taken by the agent from the starting states.
+            - rewards are the rewards received by the agent after taking the actions.
+            - next_states are the new states of the agent after taking the actions.
+            - done_vals are the boolean values indicating if the episode ended.
+
+        All tuple elements are TensorFlow Tensors whose shape is determined by the
+        mini-batch size and the given Gym environment. For the Lunar Lander environment
+        the states and next_states will have a shape of [MINIBATCH_SIZE, 8] while the
+        actions, rewards, and done_vals will have a shape of [MINIBATCH_SIZE]. All
+        TensorFlow Tensors have elements with dtype=tf.float32.
+    """
+
+    experiences = random.sample(memory_buffer, k=MINIBATCH_SIZE)
+    states = tf.convert_to_tensor(
+        np.array([e.state for e in experiences if e is not None]), dtype=tf.float32
+    )
+    actions = tf.convert_to_tensor(
+        np.array([e.action for e in experiences if e is not None]), dtype=tf.float32
+    )
+    rewards = tf.convert_to_tensor(
+        np.array([e.reward for e in experiences if e is not None]), dtype=tf.float32
+    )
+    next_states = tf.convert_to_tensor(
+        np.array([e.next_state for e in experiences if e is not None]), dtype=tf.float32
+    )
+    done_vals = tf.convert_to_tensor(
+    np.array([e.done for e in experiences if e is not None]).astype(np.uint8),dtype=tf.float32,
+    )
+    return (states, actions, rewards, next_states, done_vals)
+
+
+def convert_bool(state):
+    """
+    Converts done state to a float
+    
+    Args:
+        state (list):
+            List containing the 3 states in Blackjack environment
+            
+    Returns:
+        state (list):
+            With third element converted from a bool to a float.
+    """
+    state[2] = float(state[2])
+    
+    return state
+
+
+def get_new_eps(epsilon):
+    """
+    Updates the epsilon value for the ε-greedy policy.
+    
+    Gradually decreases the value of epsilon towards a minimum value (E_MIN) using the
+    given ε-decay rate (E_DECAY).
+
+    Args:
+        epsilon (float):
+            The current value of epsilon.
+
+    Returns:
+       A float with the updated value of epsilon.
+    """
+
+    return max(E_MIN, E_DECAY * epsilon)
